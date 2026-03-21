@@ -1,0 +1,86 @@
+@import "tailwindcss";
+
+@theme inline {
+  --color-bg-primary: #0A0A0F;
+  --color-bg-secondary: #12121A;
+  --color-bg-tertiary: #1A1A2E;
+  --color-border: #2A2A3E;
+  --color-text-primary: #E8E8F0;
+  --color-text-secondary: #8888A0;
+  --color-accent: #6C5CE7;
+  --color-accent-hover: #7D6FF0;
+  --color-accent-cyan: #00D2FF;
+  --color-success: #00E676;
+  --color-danger: #FF5252;
+  --color-favorite: #FFD700;
+
+  --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Satoshi", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+}
+
+@font-face {
+  font-family: "Satoshi";
+  src: url("https://fonts.cdnfonts.com/css/satoshi");
+  font-display: swap;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #2A2A3E #0A0A0F;
+}
+
+body {
+  background-color: #0A0A0F;
+  color: #E8E8F0;
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+::selection {
+  background-color: rgba(108, 92, 231, 0.3);
+  color: #E8E8F0;
+}
+
+/* Glass morphism utility */
+.glass {
+  background: rgba(18, 18, 26, 0.7);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(42, 42, 62, 0.5);
+}
+
+/* Card glow effect */
+.card-glow {
+  transition: all 0.3s ease;
+}
+.card-glow:hover {
+  box-shadow: 0 4px 20px rgba(108, 92, 231, 0.15);
+  border-color: rgba(108, 92, 231, 0.3);
+  transform: translateY(-1px);
+}
+
+/* Gradient mesh for login */
+.gradient-mesh {
+  background:
+    radial-gradient(at 20% 80%, rgba(108, 92, 231, 0.15) 0%, transparent 50%),
+    radial-gradient(at 80% 20%, rgba(0, 210, 255, 0.1) 0%, transparent 50%),
+    radial-gradient(at 50% 50%, rgba(108, 92, 231, 0.05) 0%, transparent 70%);
+  animation: meshMove 20s ease-in-out infinite alternate;
+}
+
+@keyframes meshMove {
+  0% { background-position: 0% 0%, 100% 100%, 50% 50%; }
+  100% { background-position: 100% 100%, 0% 0%, 50% 50%; }
+}
+
+/* Copy feedback animation */
+@keyframes copyPulse {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.2); }
+  100% { transform: scale(1); }
+}
+.copy-pulse {
+  animation: copyPulse 0.3s ease-in-out;
+}
