@@ -1,39 +1,55 @@
 // ═══════════════════════════════════════════════════════════════
-// Sync Engine — Supabase (primary) + localStorage (offline cache)
+// Sync Engine — Firestore (primary) + localStorage (offline cache)
 // ═══════════════════════════════════════════════════════════════
 //
 // Stratégie :
 // 1. Toute écriture va d'abord dans localStorage (instantané)
-// 2. Si online + Supabase configuré → push vers Supabase
-// 3. Si offline → stocker dans la queue de sync
-// 4. Au retour online → rejouer la queue automatiquement
+// 2. Si Firebase configuré → push vers Firestore (sync multi-appareils)
+// 3. Si offline → Firestore SDK gère le cache natif automatiquement
+// 4. Au retour online → Firestore rejoue automatiquement
 // ═══════════════════════════════════════════════════════════════
 
 "use client";
 
-import { createClient } from "@/lib/supabase/client";
+import {
+  auth,
+  isFirebaseConfigured,
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  signOut as firebaseSignOut,
+  updateProfile,
+  GoogleAuthProvider,
+  GithubAuthProvider,
+  signInWithPopup,
+} from "@/lib/firebase";
+import {
+  canUseFirestore,
+  fsGetPrompts,
+  fsCreatePrompt,
+  fsUpdatePrompt,
+  fsDeletePrompt,
+  fsToggleFavorite,
+  fsIncrementUseCount,
+  fsGetCategories,
+  fsCreateCategory,
+  fsUpdateCategory,
+  fsDeleteCategory,
+  fsGetTags,
+  fsCreateTag,
+  fsSyncToLocal,
+} from "@/lib/firestore-sync";
 import * as local from "@/lib/local-storage";
 import type { Prompt, Category, Tag, PromptFormData } from "@/types/database";
 
 // ── Config detection ───────────────────────────────
 
-function isSupabaseConfigured(): boolean {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  return !!(
-    url &&
-    key &&
-    !url.includes("your-project") &&
-    !key.includes("your-anon-key")
-  );
-}
-
 function isOnline(): boolean {
   return typeof navigator !== "undefined" ? navigator.onLine : true;
 }
 
+// Kept for backward compatibility
 export function canUseSupabase(): boolean {
-  return isSupabaseConfigured() && isOnline();
+  return false;
 }
 
 // ── Sync Queue ─────────────────────────────────────
@@ -76,7 +92,7 @@ export function onSyncNeeded(cb: () => void): () => void {
   syncCallback = cb;
 
   const handler = () => {
-    if (isOnline() && isSupabaseConfigured()) {
+    if (isOnline() && isFirebaseConfigured()) {
       cb();
     }
   };
@@ -92,6 +108,35 @@ export function getPendingSyncCount(): number {
   return getSyncQueue().length;
 }
 
+// ── Firebase Auth helpers ──────────────────────────
+
+function canUseFirebase(): boolean {
+  return isFirebaseConfigured() && auth !== null;
+}
+
+function getCurrentUid(): string | null {
+  if (auth?.currentUser) return auth.currentUser.uid;
+  try {
+    const stored = localStorage.getItem("pv_user");
+    if (stored) return JSON.parse(stored).id || null;
+  } catch { /* ignore */ }
+  return null;
+}
+
+function firebaseErrorToFrench(code: string): string {
+  const map: Record<string, string> = {
+    "auth/email-already-in-use": "Cet email est déjà utilisé",
+    "auth/invalid-email": "Email invalide",
+    "auth/weak-password": "Mot de passe trop faible (6 caractères minimum)",
+    "auth/user-not-found": "Aucun compte avec cet email",
+    "auth/wrong-password": "Mot de passe incorrect",
+    "auth/invalid-credential": "Email ou mot de passe incorrect",
+    "auth/too-many-requests": "Trop de tentatives, réessaie plus tard",
+    "auth/popup-closed-by-user": "Connexion annulée",
+  };
+  return map[code] || "Erreur d'authentification";
+}
+
 // ── Auth ───────────────────────────────────────────
 
 export async function hybridRegister(
@@ -99,76 +144,73 @@ export async function hybridRegister(
   email: string,
   password: string
 ): Promise<{ user: { id: string; email: string; name: string } | null; error: string | null }> {
-  // Always register locally first
-  const localResult = local.localRegister(name, email, password);
-  if (localResult.error) return { user: null, error: localResult.error };
-
-  const localUser = {
-    id: localResult.user!.id,
-    email: localResult.user!.email,
-    name: localResult.user!.name,
-  };
-
-  // Try Supabase if available
-  if (canUseSupabase()) {
+  // Try Firebase first if configured
+  if (canUseFirebase()) {
     try {
-      const supabase = createClient();
-      const { data, error } = await supabase.auth.signUp({
-        email,
-        password,
-        options: { data: { name } },
-      });
+      const credential = await createUserWithEmailAndPassword(auth!, email, password);
+      await updateProfile(credential.user, { displayName: name });
 
-      if (!error && data.user) {
-        // Update local user ID to match Supabase
-        const mappedUser = {
-          id: data.user.id,
-          email: data.user.email || email,
-          name,
-        };
-        localStorage.setItem(
-          "pv_user",
-          JSON.stringify(mappedUser)
-        );
-        // Store Supabase ID mapping
-        localStorage.setItem("pv_supabase_uid", data.user.id);
-        return { user: mappedUser, error: null };
-      }
-      // If Supabase fails, local still works
-      console.warn("Supabase register failed, using local:", error?.message);
-    } catch (e) {
-      console.warn("Supabase unavailable, using local mode");
+      const user = {
+        id: credential.user.uid,
+        email: credential.user.email || email,
+        name,
+      };
+
+      // Also register locally for offline use
+      local.localRegister(name, email, password);
+      localStorage.setItem("pv_user", JSON.stringify(user));
+      localStorage.setItem("pv_firebase_uid", credential.user.uid);
+
+      return { user, error: null };
+    } catch (e: unknown) {
+      const firebaseError = e as { code?: string };
+      return { user: null, error: firebaseErrorToFrench(firebaseError.code || "") };
     }
   }
 
-  return { user: localUser, error: null };
+  // Fallback to local only
+  const localResult = local.localRegister(name, email, password);
+  if (localResult.error) return { user: null, error: localResult.error };
+
+  return {
+    user: {
+      id: localResult.user!.id,
+      email: localResult.user!.email,
+      name: localResult.user!.name,
+    },
+    error: null,
+  };
 }
 
 export async function hybridLogin(
   email: string,
   password: string
 ): Promise<{ user: { id: string; email: string; name: string } | null; error: string | null }> {
-  // Try Supabase first if available
-  if (canUseSupabase()) {
+  // Try Firebase first if configured
+  if (canUseFirebase()) {
     try {
-      const supabase = createClient();
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email,
-        password,
-      });
+      const credential = await signInWithEmailAndPassword(auth!, email, password);
 
-      if (!error && data.user) {
-        const user = {
-          id: data.user.id,
-          email: data.user.email || email,
-          name: data.user.user_metadata?.name || email.split("@")[0],
-        };
-        localStorage.setItem("pv_user", JSON.stringify(user));
-        localStorage.setItem("pv_supabase_uid", data.user.id);
-        return { user, error: null };
+      const user = {
+        id: credential.user.uid,
+        email: credential.user.email || email,
+        name: credential.user.displayName || email.split("@")[0],
+      };
+
+      // Sync to local
+      const localResult = local.localLogin(email, password);
+      if (localResult.error) {
+        // User exists in Firebase but not local — register locally
+        local.localRegister(user.name, email, password);
       }
-    } catch {
-      // Fall through to local
+
+      localStorage.setItem("pv_user", JSON.stringify(user));
+      localStorage.setItem("pv_firebase_uid", credential.user.uid);
+
+      return { user, error: null };
+    } catch (e: unknown) {
+      const firebaseError = e as { code?: string };
+      return { user: null, error: firebaseErrorToFrench(firebaseError.code || "") };
     }
   }
 
@@ -186,12 +228,47 @@ export async function hybridLogin(
   };
 }
 
+export async function hybridOAuthLogin(
+  provider: "google" | "github"
+): Promise<{ user: { id: string; email: string; name: string } | null; error: string | null }> {
+  if (!canUseFirebase()) {
+    return { user: null, error: "Firebase non configuré" };
+  }
+
+  try {
+    const authProvider = provider === "google"
+      ? new GoogleAuthProvider()
+      : new GithubAuthProvider();
+
+    const credential = await signInWithPopup(auth!, authProvider);
+
+    const user = {
+      id: credential.user.uid,
+      email: credential.user.email || "",
+      name: credential.user.displayName || credential.user.email?.split("@")[0] || "",
+    };
+
+    // Register locally for offline
+    const localResult = local.localLogin(user.email, "oauth-" + credential.user.uid);
+    if (localResult.error) {
+      local.localRegister(user.name, user.email, "oauth-" + credential.user.uid);
+    }
+
+    localStorage.setItem("pv_user", JSON.stringify(user));
+    localStorage.setItem("pv_firebase_uid", credential.user.uid);
+
+    return { user, error: null };
+  } catch (e: unknown) {
+    const firebaseError = e as { code?: string };
+    return { user: null, error: firebaseErrorToFrench(firebaseError.code || "") };
+  }
+}
+
 export async function hybridLogout(): Promise<void> {
   local.localLogout();
-  if (canUseSupabase()) {
+  if (canUseFirebase()) {
     try {
-      const supabase = createClient();
-      await supabase.auth.signOut();
+      await firebaseSignOut(auth!);
     } catch {
       // Ignore
     }
@@ -203,19 +280,44 @@ export async function hybridGetUser(): Promise<{
   email: string;
   name: string;
 } | null> {
-  // Check Supabase session first
-  if (canUseSupabase()) {
+  // Check Firebase session first
+  if (canUseFirebase()) {
     try {
-      const supabase = createClient();
-      const { data } = await supabase.auth.getUser();
-      if (data.user) {
+      const firebaseUser = auth!.currentUser;
+      if (firebaseUser) {
         const user = {
-          id: data.user.id,
-          email: data.user.email || "",
-          name: data.user.user_metadata?.name || "",
+          id: firebaseUser.uid,
+          email: firebaseUser.email || "",
+          name: firebaseUser.displayName || "",
         };
         localStorage.setItem("pv_user", JSON.stringify(user));
         return user;
+      }
+
+      // Firebase may not have loaded yet — check promise
+      const freshUser = await new Promise<{ id: string; email: string; name: string } | null>(
+        (resolve) => {
+          const { onAuthStateChanged } = require("firebase/auth");
+          const unsub = onAuthStateChanged(auth!, (u: import("firebase/auth").User | null) => {
+            unsub();
+            if (u) {
+              resolve({
+                id: u.uid,
+                email: u.email || "",
+                name: u.displayName || "",
+              });
+            } else {
+              resolve(null);
+            }
+          });
+          // Timeout after 3s
+          setTimeout(() => resolve(null), 3000);
+        }
+      );
+
+      if (freshUser) {
+        localStorage.setItem("pv_user", JSON.stringify(freshUser));
+        return freshUser;
       }
     } catch {
       // Fall through
@@ -229,42 +331,16 @@ export async function hybridGetUser(): Promise<{
 // ── Prompts ────────────────────────────────────────
 
 export async function hybridFetchPrompts(): Promise<Prompt[]> {
-  if (canUseSupabase()) {
+  const uid = getCurrentUid();
+  if (canUseFirestore() && uid) {
     try {
-      const supabase = createClient();
-      const { data: prompts } = await supabase
-        .from("prompts")
-        .select("*, category:categories(*)")
-        .eq("is_deleted", false)
-        .order("updated_at", { ascending: false });
-
-      if (prompts) {
-        const { data: promptTags } = await supabase
-          .from("prompt_tags")
-          .select("prompt_id, tag:tags(*)");
-
-        const tagMap = new Map<string, Tag[]>();
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        promptTags?.forEach((pt: any) => {
-          if (!tagMap.has(pt.prompt_id)) tagMap.set(pt.prompt_id, []);
-          tagMap.get(pt.prompt_id)!.push(pt.tag as Tag);
-        });
-
-        const enriched = prompts.map((p: Prompt) => ({
-          ...p,
-          tags: tagMap.get(p.id) || [],
-        }));
-
-        // Cache locally
-        localStorage.setItem("pv_prompts", JSON.stringify(prompts));
-
-        return enriched;
-      }
+      const prompts = await fsGetPrompts(uid);
+      localStorage.setItem("pv_prompts", JSON.stringify(prompts));
+      return prompts;
     } catch {
-      console.warn("Supabase fetch failed, using local cache");
+      console.warn("Firestore fetch failed, using local cache");
     }
   }
-
   return local.localGetPrompts();
 }
 
@@ -272,68 +348,14 @@ export async function hybridCreatePrompt(
   userId: string,
   data: PromptFormData
 ): Promise<Prompt> {
-  // Always save locally first (instant)
   const localPrompt = local.localCreatePrompt(userId, data);
-
-  // Push to Supabase if available
-  if (canUseSupabase()) {
+  if (canUseFirestore()) {
     try {
-      const supabase = createClient();
-      const { data: sbPrompt, error } = await supabase
-        .from("prompts")
-        .insert({
-          user_id: userId,
-          title: data.title,
-          content: data.content,
-          description: data.description || null,
-          category_id: data.category_id || null,
-          target_model: data.target_model || null,
-          is_favorite: data.is_favorite || false,
-        })
-        .select()
-        .single();
-
-      if (!error && sbPrompt && data.tag_names?.length) {
-        for (const tagName of data.tag_names) {
-          // Get or create tag
-          let { data: existingTag } = await supabase
-            .from("tags")
-            .select()
-            .eq("user_id", userId)
-            .ilike("name", tagName)
-            .single();
-
-          if (!existingTag) {
-            const { data: newTag } = await supabase
-              .from("tags")
-              .insert({ user_id: userId, name: tagName.trim() })
-              .select()
-              .single();
-            existingTag = newTag;
-          }
-
-          if (existingTag) {
-            await supabase
-              .from("prompt_tags")
-              .insert({ prompt_id: sbPrompt.id, tag_id: existingTag.id });
-          }
-        }
-      }
-    } catch {
-      // Queue for later sync
-      addToSyncQueue({
-        type: "create_prompt",
-        payload: { userId, data, localId: localPrompt.id },
-      });
+      await fsCreatePrompt(userId, localPrompt.id, data);
+    } catch (e) {
+      console.warn("Firestore create prompt failed:", e);
     }
-  } else if (isSupabaseConfigured()) {
-    // Configured but offline — queue
-    addToSyncQueue({
-      type: "create_prompt",
-      payload: { userId, data, localId: localPrompt.id },
-    });
   }
-
   return localPrompt;
 }
 
@@ -341,152 +363,68 @@ export async function hybridUpdatePrompt(
   id: string,
   data: PromptFormData
 ): Promise<void> {
-  // Local first
   local.localUpdatePrompt(id, data);
-
-  if (canUseSupabase()) {
+  const uid = getCurrentUid();
+  if (canUseFirestore() && uid) {
     try {
-      const supabase = createClient();
-
-      // Save version
-      const { data: current } = await supabase
-        .from("prompts")
-        .select("title, content, description")
-        .eq("id", id)
-        .single();
-
-      if (current) {
-        const { count } = await supabase
-          .from("prompt_versions")
-          .select("*", { count: "exact", head: true })
-          .eq("prompt_id", id);
-
-        await supabase.from("prompt_versions").insert({
-          prompt_id: id,
-          title: current.title,
-          content: current.content,
-          description: current.description,
-          version_number: (count || 0) + 1,
-        });
-      }
-
-      await supabase
-        .from("prompts")
-        .update({
-          title: data.title,
-          content: data.content,
-          description: data.description || null,
-          category_id: data.category_id || null,
-          target_model: data.target_model || null,
-          is_favorite: data.is_favorite,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", id);
-
-      // Update tags
-      await supabase.from("prompt_tags").delete().eq("prompt_id", id);
-      const userId = localStorage.getItem("pv_supabase_uid") || "";
-      if (data.tag_names?.length) {
-        for (const tagName of data.tag_names) {
-          let { data: tag } = await supabase
-            .from("tags")
-            .select()
-            .eq("user_id", userId)
-            .ilike("name", tagName)
-            .single();
-
-          if (!tag) {
-            const { data: newTag } = await supabase
-              .from("tags")
-              .insert({ user_id: userId, name: tagName.trim() })
-              .select()
-              .single();
-            tag = newTag;
-          }
-
-          if (tag) {
-            await supabase
-              .from("prompt_tags")
-              .insert({ prompt_id: id, tag_id: tag.id });
-          }
-        }
-      }
-    } catch {
-      addToSyncQueue({ type: "update_prompt", payload: { id, data } });
+      await fsUpdatePrompt(uid, id, data);
+    } catch (e) {
+      console.warn("Firestore update prompt failed:", e);
     }
-  } else if (isSupabaseConfigured()) {
-    addToSyncQueue({ type: "update_prompt", payload: { id, data } });
   }
 }
 
 export async function hybridDeletePrompt(id: string): Promise<void> {
   local.localDeletePrompt(id);
-
-  if (canUseSupabase()) {
+  const uid = getCurrentUid();
+  if (canUseFirestore() && uid) {
     try {
-      const supabase = createClient();
-      await supabase
-        .from("prompts")
-        .update({ is_deleted: true, deleted_at: new Date().toISOString() })
-        .eq("id", id);
-    } catch {
-      addToSyncQueue({ type: "delete_prompt", payload: { id } });
+      await fsDeletePrompt(uid, id);
+    } catch (e) {
+      console.warn("Firestore delete prompt failed:", e);
     }
-  } else if (isSupabaseConfigured()) {
-    addToSyncQueue({ type: "delete_prompt", payload: { id } });
   }
 }
 
 export async function hybridToggleFavorite(id: string): Promise<boolean> {
   const newVal = local.localToggleFavorite(id);
-
-  if (canUseSupabase()) {
+  const uid = getCurrentUid();
+  if (canUseFirestore() && uid) {
     try {
-      const supabase = createClient();
-      await supabase.from("prompts").update({ is_favorite: newVal }).eq("id", id);
+      await fsToggleFavorite(uid, id, newVal);
     } catch {
-      addToSyncQueue({ type: "toggle_favorite", payload: { id, newVal } });
+      // Non-critical
     }
   }
-
   return newVal;
 }
 
 export async function hybridIncrementUseCount(id: string): Promise<number> {
   const newCount = local.localIncrementUseCount(id);
-
-  if (canUseSupabase()) {
+  const uid = getCurrentUid();
+  if (canUseFirestore() && uid) {
     try {
-      const supabase = createClient();
-      await supabase.from("prompts").update({ use_count: newCount }).eq("id", id);
+      await fsIncrementUseCount(uid, id, newCount);
     } catch {
-      // Non-critical, skip queue
+      // Non-critical
     }
   }
-
   return newCount;
 }
 
 // ── Categories ─────────────────────────────────────
 
 export async function hybridFetchCategories(): Promise<Category[]> {
-  if (canUseSupabase()) {
+  const uid = getCurrentUid();
+  if (canUseFirestore() && uid) {
     try {
-      const supabase = createClient();
-      const { data } = await supabase
-        .from("categories")
-        .select("*")
-        .order("sort_order", { ascending: true });
-
-      if (data) {
-        localStorage.setItem("pv_categories", JSON.stringify(data));
-        return data;
-      }
+      const data = await fsGetCategories(uid);
+      localStorage.setItem("pv_categories", JSON.stringify(data));
+      return data;
     } catch {
       // Fall through
     }
   }
-
   return local.localGetCategories();
 }
 
@@ -497,25 +435,13 @@ export async function hybridCreateCategory(
   icon: string
 ): Promise<Category> {
   const cat = local.localCreateCategory(userId, name, color, icon);
-
-  if (canUseSupabase()) {
+  if (canUseFirestore()) {
     try {
-      const supabase = createClient();
-      await supabase.from("categories").insert({
-        user_id: userId,
-        name,
-        color,
-        icon,
-        sort_order: cat.sort_order,
-      });
-    } catch {
-      addToSyncQueue({
-        type: "create_category",
-        payload: { userId, name, color, icon },
-      });
+      await fsCreateCategory(userId, cat.id, name, color, icon, cat.sort_order);
+    } catch (e) {
+      console.warn("Firestore create category failed:", e);
     }
   }
-
   return cat;
 }
 
@@ -524,27 +450,24 @@ export async function hybridUpdateCategory(
   data: Partial<Category>
 ): Promise<void> {
   local.localUpdateCategory(id, data);
-
-  if (canUseSupabase()) {
+  const uid = getCurrentUid();
+  if (canUseFirestore() && uid) {
     try {
-      const supabase = createClient();
-      await supabase.from("categories").update(data).eq("id", id);
-    } catch {
-      addToSyncQueue({ type: "update_category", payload: { id, data } });
+      await fsUpdateCategory(uid, id, data);
+    } catch (e) {
+      console.warn("Firestore update category failed:", e);
     }
   }
 }
 
 export async function hybridDeleteCategory(id: string): Promise<void> {
   local.localDeleteCategory(id);
-
-  if (canUseSupabase()) {
+  const uid = getCurrentUid();
+  if (canUseFirestore() && uid) {
     try {
-      const supabase = createClient();
-      await supabase.from("prompts").update({ category_id: null }).eq("category_id", id);
-      await supabase.from("categories").delete().eq("id", id);
-    } catch {
-      addToSyncQueue({ type: "delete_category", payload: { id } });
+      await fsDeleteCategory(uid, id);
+    } catch (e) {
+      console.warn("Firestore delete category failed:", e);
     }
   }
 }
@@ -552,19 +475,16 @@ export async function hybridDeleteCategory(id: string): Promise<void> {
 // ── Tags ───────────────────────────────────────────
 
 export async function hybridFetchTags(): Promise<Tag[]> {
-  if (canUseSupabase()) {
+  const uid = getCurrentUid();
+  if (canUseFirestore() && uid) {
     try {
-      const supabase = createClient();
-      const { data } = await supabase.from("tags").select("*");
-      if (data) {
-        localStorage.setItem("pv_tags", JSON.stringify(data));
-        return data;
-      }
+      const data = await fsGetTags(uid);
+      localStorage.setItem("pv_tags", JSON.stringify(data));
+      return data;
     } catch {
       // Fall through
     }
   }
-
   return local.localGetTags();
 }
 
@@ -573,97 +493,28 @@ export async function hybridCreateTag(
   name: string
 ): Promise<Tag | null> {
   const tag = local.localCreateTag(userId, name);
-
-  if (canUseSupabase() && tag) {
+  if (canUseFirestore() && tag) {
     try {
-      const supabase = createClient();
-      await supabase
-        .from("tags")
-        .upsert({ user_id: userId, name: name.trim() }, { onConflict: "user_id,name" });
-    } catch {
-      addToSyncQueue({ type: "create_tag", payload: { userId, name } });
+      await fsCreateTag(userId, tag.id, name);
+    } catch (e) {
+      console.warn("Firestore create tag failed:", e);
     }
   }
-
   return tag;
 }
 
-// ── Full Sync (replay queue) ───────────────────────
+// ── Full Sync depuis le cloud ──────────────────────
 
 export async function replaySync(): Promise<number> {
-  if (!canUseSupabase()) return 0;
-
-  const queue = getSyncQueue();
-  if (queue.length === 0) return 0;
-
-  let synced = 0;
-  const userId = localStorage.getItem("pv_supabase_uid") || "";
-
-  for (const action of queue) {
-    try {
-      switch (action.type) {
-        case "create_prompt": {
-          const p = action.payload;
-          const supabase = createClient();
-          await supabase.from("prompts").insert({
-            user_id: userId,
-            title: (p.data as PromptFormData).title,
-            content: (p.data as PromptFormData).content,
-            description: (p.data as PromptFormData).description || null,
-            category_id: (p.data as PromptFormData).category_id || null,
-            target_model: (p.data as PromptFormData).target_model || null,
-            is_favorite: (p.data as PromptFormData).is_favorite || false,
-          });
-          synced++;
-          break;
-        }
-        case "update_prompt": {
-          const supabase = createClient();
-          const d = action.payload.data as PromptFormData;
-          await supabase
-            .from("prompts")
-            .update({
-              title: d.title,
-              content: d.content,
-              description: d.description || null,
-              category_id: d.category_id || null,
-              target_model: d.target_model || null,
-              is_favorite: d.is_favorite,
-              updated_at: new Date().toISOString(),
-            })
-            .eq("id", action.payload.id as string);
-          synced++;
-          break;
-        }
-        case "delete_prompt": {
-          const supabase = createClient();
-          await supabase
-            .from("prompts")
-            .update({ is_deleted: true, deleted_at: new Date().toISOString() })
-            .eq("id", action.payload.id as string);
-          synced++;
-          break;
-        }
-        case "create_category": {
-          const supabase = createClient();
-          await supabase.from("categories").insert({
-            user_id: userId,
-            name: action.payload.name as string,
-            color: action.payload.color as string,
-            icon: action.payload.icon as string,
-          });
-          synced++;
-          break;
-        }
-        default:
-          synced++;
-          break;
-      }
-    } catch (e) {
-      console.warn("Sync action failed, will retry:", e);
-      // Keep failed actions in queue
-      continue;
-    }
+  const uid = getCurrentUid();
+  if (!canUseFirestore() || !uid) return 0;
+  try {
+    await fsSyncToLocal(uid);
+    clearSyncQueue();
+    return 1;
+  } catch {
+    return 0;
+  }
   }
 
   clearSyncQueue();
