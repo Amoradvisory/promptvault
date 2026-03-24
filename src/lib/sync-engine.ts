@@ -515,8 +515,4 @@ export async function replaySync(): Promise<number> {
   } catch {
     return 0;
   }
-  }
-
-  clearSyncQueue();
-  return synced;
 }
