@@ -1,36 +1,76 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# PromptVault
 
-## Getting Started
+> Base de données de prompts IA — sync multi-appareils, Google Auth, PWA + APK Android
 
-First, run the development server:
+## Fonctionnalités
+
+- **Connexion Google** — un seul compte, tous les appareils
+- **Sync automatique** via Firebase Firestore — PC, tablette, téléphone
+- **Offline-first** — fonctionne sans connexion, sync au retour online
+- **PWA installable** sur mobile et desktop
+- **APK Android** générable via Capacitor
+- **Interface premium** — recherche instantanée, catégories, tags, favoris
+
+## Stack technique
+
+| Couche | Technologie |
+|--------|-------------|
+| Framework | Next.js 16 (App Router) |
+| Auth | Firebase Auth (Google OAuth) |
+| Base de données | Firestore (sync temps réel) |
+| Cache offline | localStorage |
+| APK Android | Capacitor 8 |
+| UI | Tailwind CSS + Radix UI + Framer Motion |
+| Deploy web | Vercel |
+
+## Lancer en développement
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+# → http://localhost:3000
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Build APK Android
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+### Prérequis
+- Android Studio installé
+- Java 17+
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+### Étapes
 
-## Learn More
+```bash
+# 1. Build + sync + ouvre Android Studio
+npm run build:apk
 
-To learn more about Next.js, take a look at the following resources:
+# 2. Dans Android Studio :
+#    Build > Generate Signed APK
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Structure du projet
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+```
+src/
+├── app/
+│   ├── auth/login/     # Connexion (Google + email/mdp)
+│   ├── auth/register/  # Inscription
+│   └── dashboard/      # Dashboard principal
+├── lib/
+│   ├── firebase.ts         # Config Firebase + exports Firestore
+│   ├── firestore-sync.ts   # Sync cloud (CRUD Firestore)
+│   ├── sync-engine.ts      # Moteur hybride (local + Firestore)
+│   └── local-storage.ts    # Cache offline
+└── types/
+    └── database.ts     # Types TypeScript
+```
 
-## Deploy on Vercel
+## Déploiement web (Vercel)
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+```bash
+npx vercel --prod
+```
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Versions
+
+- `v0.1.0` — Bootstrap PWA, auth locale
+- `v0.2.0` — Firestore sync multi-appareils + Google Auth + Capacitor APK
