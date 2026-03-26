@@ -2,18 +2,15 @@
 
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { localGetUser } from "@/lib/local-storage";
+import { hybridGetUser } from "@/lib/sync-engine";
 
 export default function Home() {
   const router = useRouter();
 
   useEffect(() => {
-    const user = localGetUser();
-    if (user) {
-      router.replace("/dashboard");
-    } else {
-      router.replace("/auth/login");
-    }
+    void hybridGetUser().then((user) => {
+      router.replace(user ? "/dashboard" : "/auth/login");
+    });
   }, [router]);
 
   return null;

@@ -9,17 +9,16 @@ import type {
   Filters,
   SortOption,
   PromptFormData,
+  SyncSnapshot,
 } from "@/types/database";
 import * as hybrid from "@/lib/sync-engine";
 
 interface AppState {
-  // Data
   prompts: Prompt[];
   categories: Category[];
   tags: Tag[];
   user: { id: string; email: string; name: string | null } | null;
 
-  // UI State
   filters: Filters;
   isLoading: boolean;
   editingPrompt: Prompt | null;
@@ -28,10 +27,9 @@ interface AppState {
   isOnline: boolean;
   pendingSync: number;
 
-  // Actions — Auth
   setUser: (user: AppState["user"]) => void;
+  hydrateData: (snapshot: SyncSnapshot) => void;
 
-  // Actions — Prompts
   fetchPrompts: () => Promise<void>;
   createPrompt: (data: PromptFormData) => Promise<Prompt | null>;
   updatePrompt: (id: string, data: PromptFormData) => Promise<void>;
@@ -40,28 +38,23 @@ interface AppState {
   incrementUseCount: (id: string) => Promise<void>;
   duplicatePrompt: (id: string) => Promise<void>;
 
-  // Actions — Categories
   fetchCategories: () => Promise<void>;
   createCategory: (name: string, color: string, icon: string) => Promise<void>;
   updateCategory: (id: string, data: Partial<Category>) => Promise<void>;
   deleteCategory: (id: string) => Promise<void>;
 
-  // Actions — Tags
   fetchTags: () => Promise<void>;
   createTag: (name: string) => Promise<Tag | null>;
 
-  // Actions — Filters
   setFilter: <K extends keyof Filters>(key: K, value: Filters[K]) => void;
   resetFilters: () => void;
 
-  // Actions — UI
   openEditor: (prompt?: Prompt) => void;
   closeEditor: () => void;
   toggleSidebar: () => void;
   setOnline: (online: boolean) => void;
   syncNow: () => Promise<void>;
 
-  // Computed
   filteredPrompts: () => Prompt[];
 }
 
@@ -73,6 +66,15 @@ const defaultFilters: Filters = {
   favorites_only: false,
   sort: "updated_desc",
 };
+
+function snapshotToState(snapshot: SyncSnapshot) {
+  return {
+    prompts: snapshot.prompts,
+    categories: snapshot.categories,
+    tags: snapshot.tags,
+    pendingSync: hybrid.getPendingSyncCount(),
+  };
+}
 
 export const useStore = create<AppState>((set, get) => ({
   prompts: [],
@@ -89,12 +91,12 @@ export const useStore = create<AppState>((set, get) => ({
 
   setUser: (user) => set({ user }),
 
-  // ── Prompts (hybrid) ───────────────────────────
+  hydrateData: (snapshot) => set(snapshotToState(snapshot)),
 
   fetchPrompts: async () => {
     set({ isLoading: true });
-    const prompts = await hybrid.hybridFetchPrompts();
-    set({ prompts, isLoading: false });
+    const snapshot = await hybrid.hybridFetchAllData();
+    set({ ...snapshotToState(snapshot), isLoading: false });
   },
 
   createPrompt: async (data) => {
@@ -102,48 +104,37 @@ export const useStore = create<AppState>((set, get) => ({
     if (!user) return null;
 
     const prompt = await hybrid.hybridCreatePrompt(user.id, data);
-    // Re-fetch to get enriched data
-    const prompts = await hybrid.hybridFetchPrompts();
-    const tags = await hybrid.hybridFetchTags();
-    set({ prompts, tags, pendingSync: hybrid.getPendingSyncCount() });
+    const snapshot = await hybrid.hybridFetchAllData();
+    set(snapshotToState(snapshot));
     return prompt;
   },
 
   updatePrompt: async (id, data) => {
     await hybrid.hybridUpdatePrompt(id, data);
-    const prompts = await hybrid.hybridFetchPrompts();
-    const tags = await hybrid.hybridFetchTags();
-    set({ prompts, tags, pendingSync: hybrid.getPendingSyncCount() });
+    const snapshot = await hybrid.hybridFetchAllData();
+    set(snapshotToState(snapshot));
   },
 
   deletePrompt: async (id) => {
     await hybrid.hybridDeletePrompt(id);
-    set((s) => ({
-      prompts: s.prompts.filter((p) => p.id !== id),
-      pendingSync: hybrid.getPendingSyncCount(),
-    }));
+    const snapshot = await hybrid.hybridFetchAllData();
+    set(snapshotToState(snapshot));
   },
 
   toggleFavorite: async (id) => {
-    const newVal = await hybrid.hybridToggleFavorite(id);
-    set((s) => ({
-      prompts: s.prompts.map((p) =>
-        p.id === id ? { ...p, is_favorite: newVal } : p
-      ),
-    }));
+    await hybrid.hybridToggleFavorite(id);
+    const snapshot = await hybrid.hybridFetchAllData();
+    set(snapshotToState(snapshot));
   },
 
   incrementUseCount: async (id) => {
-    const newCount = await hybrid.hybridIncrementUseCount(id);
-    set((s) => ({
-      prompts: s.prompts.map((p) =>
-        p.id === id ? { ...p, use_count: newCount } : p
-      ),
-    }));
+    await hybrid.hybridIncrementUseCount(id);
+    const snapshot = await hybrid.hybridFetchAllData();
+    set(snapshotToState(snapshot));
   },
 
   duplicatePrompt: async (id) => {
-    const prompt = get().prompts.find((p) => p.id === id);
+    const prompt = get().prompts.find((item) => item.id === id);
     if (!prompt) return;
 
     await get().createPrompt({
@@ -152,49 +143,39 @@ export const useStore = create<AppState>((set, get) => ({
       description: prompt.description || undefined,
       category_id: prompt.category_id,
       target_model: prompt.target_model,
-      tag_names: prompt.tags?.map((t) => t.name) || [],
+      tag_names: prompt.tag_names,
     });
   },
 
-  // ── Categories (hybrid) ────────────────────────
-
   fetchCategories: async () => {
-    const categories = await hybrid.hybridFetchCategories();
-    set({ categories });
+    const snapshot = await hybrid.hybridFetchAllData();
+    set(snapshotToState(snapshot));
   },
 
   createCategory: async (name, color, icon) => {
     const user = get().user;
     if (!user) return;
 
-    const cat = await hybrid.hybridCreateCategory(user.id, name, color, icon);
-    set((s) => ({ categories: [...s.categories, cat] }));
+    await hybrid.hybridCreateCategory(user.id, name, color, icon);
+    const snapshot = await hybrid.hybridFetchAllData();
+    set(snapshotToState(snapshot));
   },
 
   updateCategory: async (id, data) => {
     await hybrid.hybridUpdateCategory(id, data);
-    set((s) => ({
-      categories: s.categories.map((c) =>
-        c.id === id ? { ...c, ...data } : c
-      ),
-    }));
+    const snapshot = await hybrid.hybridFetchAllData();
+    set(snapshotToState(snapshot));
   },
 
   deleteCategory: async (id) => {
     await hybrid.hybridDeleteCategory(id);
-    set((s) => ({
-      categories: s.categories.filter((c) => c.id !== id),
-      prompts: s.prompts.map((p) =>
-        p.category_id === id ? { ...p, category_id: null, category: null } : p
-      ),
-    }));
+    const snapshot = await hybrid.hybridFetchAllData();
+    set(snapshotToState(snapshot));
   },
 
-  // ── Tags (hybrid) ─────────────────────────────
-
   fetchTags: async () => {
-    const tags = await hybrid.hybridFetchTags();
-    set({ tags });
+    const snapshot = await hybrid.hybridFetchAllData();
+    set(snapshotToState(snapshot));
   },
 
   createTag: async (name) => {
@@ -202,66 +183,48 @@ export const useStore = create<AppState>((set, get) => ({
     if (!user) return null;
 
     const tag = await hybrid.hybridCreateTag(user.id, name);
-    if (tag) {
-      set((s) => {
-        const exists = s.tags.find((t) => t.id === tag.id);
-        return exists ? s : { tags: [...s.tags, tag] };
-      });
-    }
+    const snapshot = await hybrid.hybridFetchAllData();
+    set(snapshotToState(snapshot));
     return tag;
   },
 
-  // ── Filters ────────────────────────────────────
-
   setFilter: (key, value) =>
-    set((s) => ({ filters: { ...s.filters, [key]: value } })),
+    set((state) => ({ filters: { ...state.filters, [key]: value } })),
 
   resetFilters: () => set({ filters: { ...defaultFilters } }),
 
-  // ── UI ─────────────────────────────────────────
-
-  openEditor: (prompt) =>
-    set({ editingPrompt: prompt || null, isEditorOpen: true }),
+  openEditor: (prompt) => set({ editingPrompt: prompt || null, isEditorOpen: true }),
 
   closeEditor: () => set({ editingPrompt: null, isEditorOpen: false }),
 
-  toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
+  toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
 
   setOnline: (online) => set({ isOnline: online }),
 
   syncNow: async () => {
-    const synced = await hybrid.replaySync();
-    if (synced > 0) {
-      // Re-fetch everything from Supabase
-      await get().fetchPrompts();
-      await get().fetchCategories();
-      await get().fetchTags();
-    }
-    set({ pendingSync: hybrid.getPendingSyncCount() });
+    await hybrid.replaySync();
+    const snapshot = await hybrid.hybridFetchAllData();
+    set(snapshotToState(snapshot));
   },
-
-  // ── Computed ───────────────────────────────────
 
   filteredPrompts: () => {
     const { prompts, filters } = get();
     let result = [...prompts];
 
     if (filters.category_id) {
-      result = result.filter((p) => p.category_id === filters.category_id);
+      result = result.filter((prompt) => prompt.category_id === filters.category_id);
     }
 
     if (filters.tag_id) {
-      result = result.filter((p) =>
-        p.tags?.some((t) => t.id === filters.tag_id)
-      );
+      result = result.filter((prompt) => prompt.tags?.some((tag) => tag.id === filters.tag_id));
     }
 
     if (filters.target_model) {
-      result = result.filter((p) => p.target_model === filters.target_model);
+      result = result.filter((prompt) => prompt.target_model === filters.target_model);
     }
 
     if (filters.favorites_only) {
-      result = result.filter((p) => p.is_favorite);
+      result = result.filter((prompt) => prompt.is_favorite);
     }
 
     if (filters.search.trim()) {
@@ -275,32 +238,32 @@ export const useStore = create<AppState>((set, get) => ({
         threshold: 0.3,
         ignoreLocation: true,
       });
-      result = fuse.search(filters.search).map((r) => r.item);
+      result = fuse.search(filters.search).map((entry) => entry.item);
     }
 
-    const sortFns: Record<SortOption, (a: Prompt, b: Prompt) => number> = {
-      updated_desc: (a, b) =>
-        new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime(),
-      updated_asc: (a, b) =>
-        new Date(a.updated_at).getTime() - new Date(b.updated_at).getTime(),
-      created_desc: (a, b) =>
-        new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
-      created_asc: (a, b) =>
-        new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
-      alpha_asc: (a, b) => a.title.localeCompare(b.title, "fr"),
-      alpha_desc: (a, b) => b.title.localeCompare(a.title, "fr"),
-      most_used: (a, b) => b.use_count - a.use_count,
-      favorites_first: (a, b) => {
-        if (a.is_favorite !== b.is_favorite)
-          return a.is_favorite ? -1 : 1;
-        return (
-          new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
-        );
+    const sorters: Record<SortOption, (left: Prompt, right: Prompt) => number> = {
+      updated_desc: (left, right) =>
+        new Date(right.updated_at).getTime() - new Date(left.updated_at).getTime(),
+      updated_asc: (left, right) =>
+        new Date(left.updated_at).getTime() - new Date(right.updated_at).getTime(),
+      created_desc: (left, right) =>
+        new Date(right.created_at).getTime() - new Date(left.created_at).getTime(),
+      created_asc: (left, right) =>
+        new Date(left.created_at).getTime() - new Date(right.created_at).getTime(),
+      alpha_asc: (left, right) => left.title.localeCompare(right.title, "fr"),
+      alpha_desc: (left, right) => right.title.localeCompare(left.title, "fr"),
+      most_used: (left, right) => right.use_count - left.use_count,
+      favorites_first: (left, right) => {
+        if (left.is_favorite !== right.is_favorite) {
+          return left.is_favorite ? -1 : 1;
+        }
+
+        return new Date(right.updated_at).getTime() - new Date(left.updated_at).getTime();
       },
     };
 
     if (!filters.search.trim()) {
-      result.sort(sortFns[filters.sort]);
+      result.sort(sorters[filters.sort]);
     }
 
     return result;

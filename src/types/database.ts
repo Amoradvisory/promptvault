@@ -30,6 +30,7 @@ export interface Prompt {
   use_count: number;
   is_deleted: boolean;
   deleted_at: string | null;
+  tag_names: string[];
   created_at: string;
   updated_at: string;
   // Joined
@@ -86,6 +87,12 @@ export interface Filters {
   target_model: string | null;
   favorites_only: boolean;
   sort: SortOption;
+}
+
+export interface SyncSnapshot {
+  prompts: Prompt[];
+  categories: Category[];
+  tags: Tag[];
 }
 
 export const DEFAULT_CATEGORIES = [

@@ -3,8 +3,8 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { hybridLogin, canUseSupabase } from "@/lib/sync-engine";
-import { createClient } from "@/lib/supabase/client";
+import { hybridLogin, hybridOAuthLogin } from "@/lib/sync-engine";
+import { isFirebaseConfigured } from "@/lib/firebase";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Lock, Mail, Vault, Github, Loader2, Cloud, HardDrive } from "lucide-react";
@@ -15,7 +15,7 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const supabaseReady = canUseSupabase();
+  const authReady = isFirebaseConfigured();
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -34,14 +34,15 @@ export default function LoginPage() {
   };
 
   const handleOAuth = async (provider: "google" | "github") => {
-    if (!supabaseReady) return;
-    const supabase = createClient();
-    await supabase.auth.signInWithOAuth({
-      provider,
-      options: {
-        redirectTo: `${window.location.origin}/auth/callback`,
-      },
-    });
+    setError("");
+    setLoading(true);
+    const { error } = await hybridOAuthLogin(provider);
+    if (error) {
+      setError(error);
+      setLoading(false);
+      return;
+    }
+    router.push("/dashboard");
   };
 
   return (
@@ -71,8 +72,8 @@ export default function LoginPage() {
             </p>
           </div>
 
-          {/* OAuth — only when Supabase is configured */}
-          {supabaseReady && (
+          {/* OAuth — only when Firebase is configured */}
+          {authReady && (
             <>
               <div className="grid grid-cols-2 gap-3">
                 <Button
@@ -171,7 +172,7 @@ export default function LoginPage() {
 
         {/* Mode indicator */}
         <div className="flex items-center justify-center gap-2 mt-4">
-          {supabaseReady ? (
+          {authReady ? (
             <>
               <Cloud className="w-3.5 h-3.5 text-success" />
               <span className="text-xs text-text-secondary">

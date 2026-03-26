@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Plus_Jakarta_Sans, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
+import { PwaRegistrar } from "@/components/pwa/PwaRegistrar";
 
 const jakarta = Plus_Jakarta_Sans({
   variable: "--font-sans",
@@ -15,12 +16,13 @@ const jetbrains = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "PromptVault — Tes prompts, partout, pour toujours",
+  title: "PromptVault - Tes prompts, partout, pour toujours",
   description:
-    "Stocke, organise et retrouve tes prompts IA depuis n'importe quel appareil. Interface premium, recherche instantanée, copie en 1 clic.",
+    "Stocke, organise et retrouve tes prompts IA depuis n'importe quel appareil. Interface premium, recherche instantanee, copie en 1 clic.",
   manifest: "/manifest.json",
   icons: {
     icon: "/favicon.ico",
+    apple: "/icon-192.png",
   },
 };
 
@@ -41,6 +43,7 @@ export default function RootLayout({
       className={`${jakarta.variable} ${jetbrains.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col font-[family-name:var(--font-sans)]">
+        <PwaRegistrar />
         {children}
       </body>
     </html>

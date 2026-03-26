@@ -46,6 +46,9 @@ export function ImportExport({ mode, onClose }: ImportExportProps) {
         color: c.color,
         icon: c.icon,
       })),
+      tags: tags.map((tag) => ({
+        name: tag.name,
+      })),
     };
 
     const blob = new Blob([JSON.stringify(data, null, 2)], {

@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useStore } from "@/stores/useStore";
-import { hybridGetUser, onSyncNeeded, canUseSupabase } from "@/lib/sync-engine";
+import { hybridGetUser, hybridFetchAllData, onSyncNeeded, subscribeToRealtimeData } from "@/lib/sync-engine";
 import { Header } from "@/components/layout/Header";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { MobileNav } from "@/components/layout/MobileNav";
@@ -19,9 +19,7 @@ export default function DashboardPage() {
   const router = useRouter();
   const {
     setUser,
-    fetchPrompts,
-    fetchCategories,
-    fetchTags,
+    hydrateData,
     filters,
     categories,
     setOnline,
@@ -29,10 +27,9 @@ export default function DashboardPage() {
   } = useStore();
 
   const [currentView, setCurrentView] = useState("all");
-  const [importExportMode, setImportExportMode] = useState<
-    "import" | "export" | null
-  >(null);
+  const [importExportMode, setImportExportMode] = useState<"import" | "export" | null>(null);
   const [ready, setReady] = useState(false);
+  const realtimeUnsubscribeRef = useRef<(() => void) | null>(null);
 
   const initApp = useCallback(async () => {
     const user = await hybridGetUser();
@@ -42,40 +39,51 @@ export default function DashboardPage() {
     }
 
     setUser({ id: user.id, email: user.email, name: user.name });
-    await Promise.all([fetchPrompts(), fetchCategories(), fetchTags()]);
+    const snapshot = await hybridFetchAllData();
+    hydrateData(snapshot);
     setReady(true);
-  }, [setUser, fetchPrompts, fetchCategories, fetchTags, router]);
+
+    realtimeUnsubscribeRef.current?.();
+    realtimeUnsubscribeRef.current = subscribeToRealtimeData(user.id, hydrateData);
+  }, [hydrateData, router, setUser]);
 
   useEffect(() => {
-    initApp();
+    const timer = window.setTimeout(() => {
+      void initApp();
+    }, 0);
+
+    return () => {
+      window.clearTimeout(timer);
+      realtimeUnsubscribeRef.current?.();
+      realtimeUnsubscribeRef.current = null;
+    };
   }, [initApp]);
 
-  // Online/offline detection
   useEffect(() => {
     const handleOnline = () => {
       setOnline(true);
-      toast.success("Connexion rétablie — synchronisation...");
-      syncNow().then(() => {
-        toast.success("Données synchronisées");
+      toast.success("Connexion retablie. Synchronisation en cours...");
+      void syncNow().then(() => {
+        toast.success("Donnees synchronisees");
       });
     };
+
     const handleOffline = () => {
       setOnline(false);
-      toast.warning("Mode hors-ligne — les modifications seront synchronisées au retour");
+      toast.warning("Mode hors ligne. Les modifications seront synchronisees au retour.");
     };
 
     window.addEventListener("online", handleOnline);
     window.addEventListener("offline", handleOffline);
 
-    // Also listen to sync engine
-    const unsub = onSyncNeeded(() => {
-      syncNow();
+    const unsubscribe = onSyncNeeded(() => {
+      void syncNow();
     });
 
     return () => {
       window.removeEventListener("online", handleOnline);
       window.removeEventListener("offline", handleOffline);
-      unsub();
+      unsubscribe();
     };
   }, [setOnline, syncNow]);
 
@@ -92,11 +100,11 @@ export default function DashboardPage() {
       case "favorites":
         return "Favoris";
       case "category": {
-        const cat = categories.find((c) => c.id === filters.category_id);
-        return cat?.name || "Catégorie";
+        const category = categories.find((entry) => entry.id === filters.category_id);
+        return category?.name || "Categorie";
       }
       case "tag":
-        return "Résultats par tag";
+        return "Resultats par tag";
       default:
         return "Tous les prompts";
     }
@@ -140,10 +148,7 @@ export default function DashboardPage() {
       <SyncStatus />
       <MobileNav currentView={currentView} onViewChange={setCurrentView} />
       <PromptEditor />
-      <ImportExport
-        mode={importExportMode}
-        onClose={() => setImportExportMode(null)}
-      />
+      <ImportExport mode={importExportMode} onClose={() => setImportExportMode(null)} />
     </div>
   );
 }

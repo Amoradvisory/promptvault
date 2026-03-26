@@ -5,11 +5,9 @@ import { cn } from "@/lib/utils";
 import {
   LayoutDashboard,
   Star,
-  FolderOpen,
-  Tag,
+  BarChart2,
   Download,
   Upload,
-  Trash2,
   X,
   Plus,
 } from "lucide-react";
@@ -37,7 +35,6 @@ export function Sidebar({
     setFilter,
     sidebarOpen,
     toggleSidebar,
-    openEditor,
   } = useStore();
 
   const favoriteCount = prompts.filter((p) => p.is_favorite).length;
@@ -222,7 +219,7 @@ export function Sidebar({
             <Download className="w-4 h-4" />
             Exporter
           </button>
-          {navItem("trash", "Corbeille", <Trash2 className="w-4 h-4" />)}
+          {navItem("stats", "Statistiques", <BarChart2 className="w-4 h-4" />)}
         </div>
       </aside>
     </>

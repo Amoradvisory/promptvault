@@ -1,16 +1,16 @@
 "use client";
 
 import { useStore } from "@/stores/useStore";
-import { canUseSupabase } from "@/lib/sync-engine";
+import { isFirebaseConfigured } from "@/lib/firebase";
 import { Cloud, CloudOff, HardDrive, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export function SyncStatus() {
   const { isOnline, pendingSync, syncNow } = useStore();
-  const supabaseConfigured = canUseSupabase();
+  const cloudConfigured = isFirebaseConfigured();
 
   // Don't show anything if everything is normal (online + synced)
-  if (supabaseConfigured && isOnline && pendingSync === 0) return null;
+  if (cloudConfigured && isOnline && pendingSync === 0) return null;
 
   return (
     <div className="fixed bottom-20 left-4 z-30 lg:bottom-4">
@@ -35,7 +35,7 @@ export function SyncStatus() {
               </span>
             )}
           </>
-        ) : !supabaseConfigured ? (
+        ) : !cloudConfigured ? (
           <>
             <HardDrive className="w-3.5 h-3.5" />
             <span>Mode local</span>

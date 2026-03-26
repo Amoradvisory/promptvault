@@ -3,7 +3,8 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { hybridRegister, canUseSupabase } from "@/lib/sync-engine";
+import { hybridRegister } from "@/lib/sync-engine";
+import { isFirebaseConfigured } from "@/lib/firebase";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Lock, Mail, User, Vault, Loader2, Cloud, HardDrive } from "lucide-react";
@@ -16,7 +17,7 @@ export default function RegisterPage() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const supabaseReady = canUseSupabase();
+  const authReady = isFirebaseConfigured();
 
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -113,7 +114,7 @@ export default function RegisterPage() {
         </div>
 
         <div className="flex items-center justify-center gap-2 mt-4">
-          {supabaseReady ? (
+          {authReady ? (
             <>
               <Cloud className="w-3.5 h-3.5 text-success" />
               <span className="text-xs text-text-secondary">Mode cloud — sync activée</span>
